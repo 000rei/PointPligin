@@ -1,0 +1,20 @@
+advancement-rewards:
+  "minecraft:story/mine_diamond": 100
+
+daily-login:
+  enabled: true
+  points: 50
+
+shop:
+  DIAMOND:
+    type: item
+    material: DIAMOND
+    amount: 1
+  SPEED_BUFF:
+    type: potion
+    effect: SPEED
+    duration: 1200
+    amplifier: 1
+  LOGIN_UP:
+    type: login_bonus_boost
+    increase: 5

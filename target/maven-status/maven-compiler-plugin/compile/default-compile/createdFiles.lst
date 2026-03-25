@@ -1,0 +1,9 @@
+com\example\pointpligin\listener\AdvancementListener.class
+com\example\pointpligin\listener\LoginBonusListener.class
+com\example\pointpligin\storage\DataStorage.class
+com\example\pointpligin\command\RankingCommand.class
+com\example\pointpligin\Main.class
+com\example\pointpligin\PointManager.class
+com\example\pointpligin\command\RankingCommand$PlayerScore.class
+com\example\pointpligin\listener\ShopListener$ParsedSign.class
+com\example\pointpligin\listener\ShopListener.class

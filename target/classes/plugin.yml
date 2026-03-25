@@ -1,0 +1,9 @@
+name: PointPligin
+version: 1.0.0
+main: com.example.pointpligin.Main
+api-version: "1.21"
+
+commands:
+  ranking:
+    description: Show point ranking
+    usage: /ranking
