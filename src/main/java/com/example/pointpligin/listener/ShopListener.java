@@ -190,6 +190,9 @@ public class ShopListener implements Listener {
                 if (current != null) {
                     newAmplifier += current.getAmplifier();
                     newDuration = Math.max(current.getDuration(), duration);
+                } else if (addAmplifier > 0) {
+                    // "amplifier: 1" をレベル+1として扱い、初回購入でいきなりレベル2にならないよう補正
+                    newAmplifier -= 1;
                 }
                 player.addPotionEffect(new PotionEffect(effectType, newDuration, newAmplifier, true, true, true), true);
                 player.sendMessage("§a購入完了: " + effectType.getName() + " レベルが上昇しました。");

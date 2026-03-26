@@ -1,5 +1,6 @@
 com\example\pointpligin\listener\AdvancementListener.class
 com\example\pointpligin\listener\LoginBonusListener.class
+com\example\pointpligin\listener\ShopListener$PendingPurchase.class
 com\example\pointpligin\storage\DataStorage.class
 com\example\pointpligin\command\RankingCommand.class
 com\example\pointpligin\Main.class
