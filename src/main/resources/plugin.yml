@@ -7,3 +7,8 @@ commands:
   ranking:
     description: Show point ranking
     usage: /ranking
+
+permissions:
+  pointpligin.admin:
+    description: Allow creating PointShop signs
+    default: op

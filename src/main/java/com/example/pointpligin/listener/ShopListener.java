@@ -3,37 +3,51 @@ package com.example.pointpligin.listener;
 import com.example.pointpligin.Main;
 import com.example.pointpligin.PointManager;
 import com.example.pointpligin.storage.DataStorage;
-import net.md_5.bungee.api.chat.ClickEvent;
-import net.md_5.bungee.api.chat.ComponentBuilder;
-import net.md_5.bungee.api.chat.TextComponent;
-import org.bukkit.Bukkit;
+import org.bukkit.Location;
 import org.bukkit.ChatColor;
 import org.bukkit.Material;
 import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.file.FileConfiguration;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
+import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.SignChangeEvent;
-import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
+import org.bukkit.block.Sign;
+import org.bukkit.plugin.java.JavaPlugin;
 
+import java.io.File;
+import java.io.IOException;
+import java.util.HashMap;
 import java.util.Locale;
+import java.util.Map;
+import java.util.UUID;
 
 public class ShopListener implements Listener {
     private static final String SHOP_HEADER = "[PointShop]";
+    private static final String ADMIN_PERMISSION = "pointpligin.admin";
+    private static final long CONFIRM_WINDOW_MS = 5000L;
+    private static final long FIRST_CLICK_COOLDOWN_MS = 500L;
 
     private final Main plugin;
     private final PointManager pointManager;
     private final DataStorage dataStorage;
+    private final Map<UUID, PendingPurchase> pendingPurchases = new HashMap<>();
+    private final File shopsFile;
+    private FileConfiguration shopsConfig;
 
     public ShopListener(Main plugin, PointManager pointManager, DataStorage dataStorage) {
         this.plugin = plugin;
         this.pointManager = pointManager;
         this.dataStorage = dataStorage;
+        this.shopsFile = new File(plugin.getDataFolder(), "shops.yml");
+        this.shopsConfig = loadYaml(plugin, shopsFile);
     }
 
     @EventHandler
@@ -42,8 +56,29 @@ public class ShopListener implements Listener {
         if (line == null || !line.equalsIgnoreCase(SHOP_HEADER)) {
             return;
         }
+
+        if (!event.getPlayer().hasPermission(ADMIN_PERMISSION)) {
+            event.getPlayer().sendMessage("§cショップ看板を作成する権限がありません。");
+            event.setCancelled(true);
+            return;
+        }
+
         event.setLine(0, "§2" + SHOP_HEADER);
-        event.getPlayer().sendMessage("§aPointShop看板を作成しました。");
+        String key = locationKey(event.getBlock().getLocation());
+        shopsConfig.set("shops." + key + ".world", event.getBlock().getWorld().getName());
+        shopsConfig.set("shops." + key + ".x", event.getBlock().getX());
+        shopsConfig.set("shops." + key + ".y", event.getBlock().getY());
+        shopsConfig.set("shops." + key + ".z", event.getBlock().getZ());
+        saveShops();
+
+        plugin.getServer().getScheduler().runTask(plugin, () -> {
+            if (!(event.getBlock().getState() instanceof Sign sign)) {
+                return;
+            }
+            sign.setWaxed(true);
+            sign.update(true, false);
+        });
+        event.getPlayer().sendMessage("§aPointShop看板を作成して保護しました。");
     }
 
     @EventHandler
@@ -51,7 +86,7 @@ public class ShopListener implements Listener {
         if (event.getAction() != Action.RIGHT_CLICK_BLOCK || event.getClickedBlock() == null) {
             return;
         }
-        if (!(event.getClickedBlock().getState() instanceof org.bukkit.block.Sign sign)) {
+        if (!(event.getClickedBlock().getState() instanceof Sign sign)) {
             return;
         }
 
@@ -60,79 +95,58 @@ public class ShopListener implements Listener {
             return;
         }
 
+        String key = locationKey(event.getClickedBlock().getLocation());
+        if (!isRegisteredShop(key)) {
+            return;
+        }
+
+        event.setCancelled(true);
+
+        long now = System.currentTimeMillis();
+        UUID playerId = event.getPlayer().getUniqueId();
+        PendingPurchase pending = pendingPurchases.get(playerId);
+
+        if (pending == null || !pending.shopKey.equals(key) || now > pending.expiresAt) {
+            pendingPurchases.put(playerId, new PendingPurchase(key, now + CONFIRM_WINDOW_MS, now + FIRST_CLICK_COOLDOWN_MS));
+            event.getPlayer().sendMessage("§e商品を購入しますか？5秒以内にもう一度右クリックで購入します。");
+            return;
+        }
+
+        if (now < pending.cooldownUntil) {
+            event.getPlayer().sendMessage("§e連打防止中です。少し待ってから再度右クリックしてください。");
+            return;
+        }
+
+        pendingPurchases.remove(playerId);
+
         ParsedSign parsed = parseSign(sign.getLine(1), sign.getLine(2), sign.getLine(3));
         if (!parsed.valid()) {
             event.getPlayer().sendMessage("§c看板フォーマットが不正です。");
             return;
         }
 
-        String command = String.format(
-                Locale.ROOT,
-                "/pointshopbuy %s %d %d %d",
-                event.getClickedBlock().getWorld().getName(),
-                event.getClickedBlock().getX(),
-                event.getClickedBlock().getY(),
-                event.getClickedBlock().getZ()
-        );
-
-        event.getPlayer().sendMessage("§e商品: §f" + parsed.itemKey + " x" + parsed.amount);
-        event.getPlayer().sendMessage("§e価格: §f" + parsed.price + " pt");
-        event.getPlayer().sendMessage("§e説明: §f" + parsed.description);
-
-        TextComponent button = new TextComponent("§a[購入する]");
-        button.setClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, command));
-        event.getPlayer().spigot().sendMessage(new ComponentBuilder(button).create());
+        processPurchase(event.getPlayer(), parsed);
     }
 
     @EventHandler
-    public void onPseudoBuyCommand(PlayerCommandPreprocessEvent event) {
-        String message = event.getMessage();
-        if (!message.toLowerCase(Locale.ROOT).startsWith("/pointshopbuy ")) {
-            return;
-        }
-        event.setCancelled(true);
-
-        String[] split = message.split(" ");
-        if (split.length != 5) {
-            event.getPlayer().sendMessage("§c購入に失敗しました。");
+    public void onRegisteredShopBreak(BlockBreakEvent event) {
+        String key = locationKey(event.getBlock().getLocation());
+        if (!isRegisteredShop(key)) {
             return;
         }
 
-        String worldName = split[1];
-        int x;
-        int y;
-        int z;
-        try {
-            x = Integer.parseInt(split[2]);
-            y = Integer.parseInt(split[3]);
-            z = Integer.parseInt(split[4]);
-        } catch (NumberFormatException ex) {
-            event.getPlayer().sendMessage("§c購入に失敗しました。");
+        shopsConfig.set("shops." + key, null);
+        saveShops();
+    }
+
+    private void processPurchase(Player player, ParsedSign parsed) {
+        if (!pointManager.removePoints(player, parsed.price)) {
+            player.sendMessage("§cポイントが足りません。");
             return;
         }
 
-        if (Bukkit.getWorld(worldName) == null) {
-            event.getPlayer().sendMessage("§c看板が見つかりません。");
-            return;
-        }
-        if (!(Bukkit.getWorld(worldName).getBlockAt(x, y, z).getState() instanceof org.bukkit.block.Sign sign)) {
-            event.getPlayer().sendMessage("§c看板が見つかりません。");
-            return;
-        }
-
-        ParsedSign parsed = parseSign(sign.getLine(1), sign.getLine(2), sign.getLine(3));
-        if (!parsed.valid()) {
-            event.getPlayer().sendMessage("§c看板設定が不正です。");
-            return;
-        }
-
-        if (!pointManager.removePoints(event.getPlayer(), parsed.price)) {
-            event.getPlayer().sendMessage("§cポイントが足りません。");
-            return;
-        }
-
-        if (!deliver(event.getPlayer(), parsed)) {
-            pointManager.addPoints(event.getPlayer(), parsed.price);
+        if (!deliver(player, parsed)) {
+            pointManager.addPoints(player, parsed.price);
         }
     }
 
@@ -225,6 +239,43 @@ public class ShopListener implements Listener {
         return text == null ? "" : ChatColor.stripColor(text).trim();
     }
 
+    private String locationKey(Location location) {
+        return String.format(
+                Locale.ROOT,
+                "%s:%d:%d:%d",
+                location.getWorld().getName(),
+                location.getBlockX(),
+                location.getBlockY(),
+                location.getBlockZ()
+        );
+    }
+
+    private boolean isRegisteredShop(String key) {
+        return shopsConfig.contains("shops." + key);
+    }
+
+    private void saveShops() {
+        try {
+            shopsConfig.save(shopsFile);
+        } catch (IOException e) {
+            plugin.getLogger().warning("Could not save shops.yml: " + e.getMessage());
+        }
+    }
+
+    private FileConfiguration loadYaml(JavaPlugin plugin, File file) {
+        if (!plugin.getDataFolder().exists()) {
+            plugin.getDataFolder().mkdirs();
+        }
+        if (!file.exists()) {
+            try {
+                file.createNewFile();
+            } catch (IOException e) {
+                throw new RuntimeException("Could not create " + file.getName(), e);
+            }
+        }
+        return YamlConfiguration.loadConfiguration(file);
+    }
+
     private record ParsedSign(String itemKey, int amount, int price, String description) {
         private boolean valid() {
             return itemKey != null && !itemKey.isBlank();
@@ -233,5 +284,8 @@ public class ShopListener implements Listener {
         private static ParsedSign invalid() {
             return new ParsedSign("", 0, 0, "");
         }
+    }
+
+    private record PendingPurchase(String shopKey, long expiresAt, long cooldownUntil) {
     }
 }
